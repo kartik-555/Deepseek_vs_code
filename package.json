@@ -1,0 +1,413 @@
+{
+  "name": "dsh-vscode",
+  "displayName": "DeepSeek Harness",
+  "description": "Run the DeepSeek Harness (dsh) agent inside VS Code, with per-repository sessions and workspaces.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publisher": "deepseek-harness",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=20"
+  },
+  "categories": [
+    "AI",
+    "Chat",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "agent",
+    "copilot"
+  ],
+  "main": "./dist/extension.cjs",
+  "icon": "media/icon.png",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "dshVscode",
+          "title": "DeepSeek Harness",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "dshVscode": [
+        {
+          "type": "webview",
+          "id": "dshVscode.chat",
+          "name": "Chat",
+          "icon": "media/activity.svg"
+        },
+        {
+          "id": "dshVscode.sessions",
+          "name": "Sessions in this repository"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "dshVscode.chat",
+        "contents": "DeepSeek Harness is starting.\n\nIf this message stays, run **DSH: Show Diagnostics** from the Command Palette."
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "dsh-vscode.agent",
+        "name": "dsh",
+        "fullName": "DeepSeek Harness",
+        "description": "Ask the DeepSeek Harness agent to work in this repository",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "explain",
+            "description": "Explain the selected code or the current file"
+          },
+          {
+            "name": "fix",
+            "description": "Find and fix a problem in this repository"
+          },
+          {
+            "name": "test",
+            "description": "Write or run tests for the current work"
+          },
+          {
+            "name": "new",
+            "description": "Start a new DSH session for this repository"
+          }
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "dshVscode.newSession",
+        "title": "New Session",
+        "category": "DSH",
+        "icon": "$(add)"
+      },
+      {
+        "command": "dshVscode.focusChat",
+        "title": "Focus Chat",
+        "category": "DSH",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "dshVscode.stop",
+        "title": "Stop the Running Turn",
+        "category": "DSH",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "dshVscode.restartRuntime",
+        "title": "Restart the Harness Runtime",
+        "category": "DSH",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "dshVscode.attachSelection",
+        "title": "Attach Selection to DSH Chat",
+        "category": "DSH"
+      },
+      {
+        "command": "dshVscode.openWebUi",
+        "title": "Open the DSH Web UI for this Repository",
+        "category": "DSH",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "dshVscode.runTaskInTerminal",
+        "title": "Run a One-Shot Task in the Terminal",
+        "category": "DSH"
+      },
+      {
+        "command": "dshVscode.openSession",
+        "title": "Open Session",
+        "category": "DSH"
+      },
+      {
+        "command": "dshVscode.deleteSession",
+        "title": "Delete Session",
+        "category": "DSH",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "dshVscode.selectModel",
+        "title": "Select Model",
+        "category": "DSH",
+        "icon": "$(chip)"
+      },
+      {
+        "command": "dshVscode.changeStorage",
+        "title": "Change Session Storage Location",
+        "category": "DSH",
+        "icon": "$(folder-library)"
+      },
+      {
+        "command": "dshVscode.revealDataDir",
+        "title": "Reveal the Repository Session Directory",
+        "category": "DSH"
+      },
+      {
+        "command": "dshVscode.showLogs",
+        "title": "Show Diagnostics",
+        "category": "DSH"
+      },
+      {
+        "command": "dshVscode.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "DSH",
+        "icon": "$(refresh)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "dshVscode.focusChat",
+        "key": "ctrl+alt+d",
+        "mac": "cmd+alt+d"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "dshVscode.newSession",
+          "when": "view == dshVscode.chat",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dshVscode.selectModel",
+          "when": "view == dshVscode.chat",
+          "group": "navigation@2"
+        },
+        {
+          "command": "dshVscode.stop",
+          "when": "view == dshVscode.chat",
+          "group": "navigation@3"
+        },
+        {
+          "command": "dshVscode.openWebUi",
+          "when": "view == dshVscode.chat",
+          "group": "navigation@4"
+        },
+        {
+          "command": "dshVscode.newSession",
+          "when": "view == dshVscode.sessions",
+          "group": "navigation@1"
+        },
+        {
+          "command": "dshVscode.refreshSessions",
+          "when": "view == dshVscode.sessions",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "dshVscode.deleteSession",
+          "when": "view == dshVscode.sessions && viewItem == dshSession",
+          "group": "inline"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "dshVscode.attachSelection",
+          "when": "editorHasSelection",
+          "group": "dsh@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "dshVscode.deleteSession",
+          "when": "false"
+        },
+        {
+          "command": "dshVscode.openSession",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DeepSeek Harness",
+      "properties": {
+        "dshVscode.dshPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `dsh` executable or entry script. Leave empty to auto-detect: `dsh` on `PATH`, then a checkout named by `#dshVscode.dshCheckout#`, then `npx @deepseek-ai/dsh`.",
+          "scope": "window"
+        },
+        "dshVscode.dshCheckout": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to a DeepSeek Harness source checkout. The runtime is launched as `node <checkout>/apps/cli/lib/bin.js`. Leave empty to auto-detect next to this workspace.",
+          "scope": "window"
+        },
+        "dshVscode.dshNode": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Node.js binary used to run a `#dshVscode.dshCheckout#`. Empty resolves the newest suitable runtime from `PATH`, `$DSH_NODE`, `$FNM_MULTISHELL_PATH`, `$NVM_BIN`, and finally the extension host runtime. DeepSeek Harness needs Node 22.19 or newer.",
+          "scope": "window"
+        },
+        "dshVscode.dshHome": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Value for `DSH_HOME` (credentials, profiles, model cache). Leave empty to inherit the default `~/.dsh`, which keeps credentials global while sessions stay in the repository.",
+          "scope": "window"
+        },
+        "dshVscode.storageLocation": {
+          "type": "string",
+          "default": "global",
+          "enum": [
+            "global",
+            "gitdir",
+            "repository",
+            "custom"
+          ],
+          "enumDescriptions": [
+            "$DSH_HOME/workspaces/<repository>-<hash>. Nothing inside the repository at all; still one store per repository.",
+            "<repository>/.git/dsh. Inside the repository folder but outside the working tree, so Git can never see it.",
+            "<repository>/.dsh in the working tree. The extension also adds it to .git/info/exclude and writes .dsh/.gitignore, so it stays out of Git.",
+            "The absolute path in dshVscode.dataDir (~ and ${workspaceFolder} are expanded)."
+          ],
+          "markdownDescription": "Where this repository's DSH sessions, storage, and chat history are kept. Use **DSH: Change Session Storage Location** to move existing data.",
+          "scope": "resource"
+        },
+        "dshVscode.dataDir": {
+          "type": "string",
+          "default": ".dsh",
+          "markdownDescription": "Directory that holds this repository's sessions (see `#dshVscode.storageLocation#`). Relative paths resolve against the repository root; `~` and `${workspaceFolder}` are expanded; an absolute path is used as is.",
+          "scope": "resource"
+        },
+        "dshVscode.provider": {
+          "type": "string",
+          "default": "deepseek-official",
+          "description": "LLM provider route for every agent the extension starts.",
+          "scope": "window"
+        },
+        "dshVscode.model": {
+          "type": "string",
+          "default": "deepseek-flash",
+          "description": "Model for every agent the extension starts.",
+          "scope": "window"
+        },
+        "dshVscode.reasoningEffort": {
+          "type": "string",
+          "default": "",
+          "enum": [
+            "",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "max"
+          ],
+          "markdownDescription": "Reasoning effort handed to the provider. Empty keeps the model default. The runtime validates the exact route at startup and reports an unsupported value.",
+          "scope": "window"
+        },
+        "dshVscode.maxTokens": {
+          "type": "number",
+          "default": 0,
+          "description": "Output token cap per request. 0 keeps the model default.",
+          "scope": "window"
+        },
+        "dshVscode.permissionMode": {
+          "type": "string",
+          "default": "workspace-write",
+          "enum": [
+            "read-only",
+            "workspace-write",
+            "danger-full-access"
+          ],
+          "enumDescriptions": [
+            "The agent may read but not write, and every escalation is refused.",
+            "The agent writes inside this repository and cannot reach outside it. Out-of-sandbox escalations fail closed because the SDK protocol cannot surface an approval prompt.",
+            "No sandbox and no approvals. The agent may run anything as your user account."
+          ],
+          "markdownDescription": "Sandbox mode for the agent, passed as `DSH_PERMISSION_MODE`.",
+          "scope": "window"
+        },
+        "dshVscode.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the harness runtime as soon as the extension activates in a repository.",
+          "scope": "window"
+        },
+        "dshVscode.showReasoning": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the model's reasoning blocks in the chat transcript.",
+          "scope": "window"
+        },
+        "dshVscode.animateChunks": {
+          "type": "boolean",
+          "default": false,
+          "description": "Reveal each answer in the sidebar progressively. The SDK protocol delivers a message only after its step commits, so this animates a finished answer rather than streaming tokens; the saved transcript always holds the complete text.",
+          "scope": "window"
+        },
+        "dshVscode.includeEditorContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Tell the agent which file and selection are active when you send a message.",
+          "scope": "window"
+        },
+        "dshVscode.userPatch": {
+          "type": "string",
+          "default": "dsh.patch.yml",
+          "markdownDescription": "Repository-relative patch file whose rows are appended after the extension's own rows, for advanced composition such as MCP servers or extra plugins. It is read from `#dshVscode.dataDir#`.",
+          "scope": "resource"
+        },
+        "dshVscode.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra arguments appended to every `dsh` launch.",
+          "scope": "window"
+        },
+        "dshVscode.webUi.port": {
+          "type": "number",
+          "default": 3080,
+          "description": "Port for the DSH Web UI the extension can launch for this repository.",
+          "scope": "window"
+        },
+        "dshVscode.webUi.trustedHosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra authorities passed as repeatable --trusted-host to the DSH Web UI.",
+          "scope": "window"
+        },
+        "dshVscode.trace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Log every protocol frame and runtime stderr line to the DSH output channel.",
+          "scope": "window"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit",
+    "bundle": "node esbuild.mjs",
+    "package": "npm run typecheck && npm run bundle && vsce package --no-dependencies --allow-missing-repository",
+    "test:e2e": "node esbuild.mjs --production && node build/test-e2e.mjs",
+    "test:e2e:offline": "node esbuild.mjs --production && DSH_E2E_OFFLINE=1 node build/test-e2e.mjs",
+    "verify": "npm run typecheck && npm run bundle && node test/smoke-activation.mjs && node test/smoke-webview.mjs && npm run test:e2e:offline",
+    "test:smoke": "node esbuild.mjs --production && node test/smoke-activation.mjs && node test/smoke-webview.mjs"
+    ,"test:webview": "node test/smoke-webview.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.1",
+    "esbuild": "^0.24.2",
+    "jsdom": "^30.1.1",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,21 @@
+# Sources, tests, and tooling are not part of the installed extension: the
+# bundle in dist/ is the only thing VS Code loads.
+src/**
+test/**
+docs/**
+scripts/**
+node_modules/**
+.npm-cache/**
+.test/**
+dist/**/*.map
+tsconfig.json
+esbuild.mjs
+package-lock.json
+.gitignore
+.vscodeignore
+**/*.ts
+!dist/**
+.tmp-webview-check/**
+.vscode/**
+build/
+.dsh/**

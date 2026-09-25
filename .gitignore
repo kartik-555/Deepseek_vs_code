@@ -1,0 +1,17 @@
+# Build output and dependencies
+node_modules/
+dist/
+.npm-cache/
+*.vsix
+
+# Scratch space for the runtime checks (copies of credentials live here)
+.test/
+.tmp-webview-check/
+
+# Editor and OS noise
+.DS_Store
+*.log
+build/
+
+# Harness data, if this project itself is ever used as a DSH workspace
+.dsh/

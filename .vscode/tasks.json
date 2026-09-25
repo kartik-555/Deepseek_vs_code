@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "tasks": [
+    {
+      "label": "watch",
+      "type": "shell",
+      "command": "node esbuild.mjs --watch",
+      "isBackground": true,
+      "presentation": { "reveal": "never" },
+      "problemMatcher": {
+        "owner": "esbuild",
+        "pattern": [{ "regexp": "^ERROR: (.+)$", "message": 1 }],
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "\\[esbuild\\]",
+          "endsPattern": "watching"
+        }
+      }
+    },
+    {
+      "label": "typecheck",
+      "type": "shell",
+      "command": "npx tsc --noEmit",
+      "problemMatcher": "$tsc"
+    }
+  ]
+}
