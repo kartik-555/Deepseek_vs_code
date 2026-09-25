@@ -102,6 +102,8 @@
     timer: 0,
     resizeObserver: null,
     follow: true,
+    activityLabel: '',
+    activityTool: '',
     pendingImages: [],
     contextChips: []
   };
@@ -1014,7 +1016,16 @@
     if (!dom) return;
     dom.working.hidden = !state.running;
     dom.transcript.setAttribute('aria-busy', state.running ? 'true' : 'false');
+    const label = state.running ? str(state.activityLabel) || 'Working' : '';
+    dom.workingText.textContent = label;
     tickTimer();
+  }
+
+  function applyActivity(payload) {
+    if (!dom) return;
+    state.activityLabel = str(payload && payload.label);
+    state.activityTool = str(payload && payload.toolName);
+    updateWorking();
   }
 
   /* ------------------------------------------------------------- composer */
@@ -1365,6 +1376,7 @@
     state.settings.permissionMode = str(settings.permissionMode);
     applySettingsDisplay();
 
+    state.activityLabel = str(payload.activity);
     applyRuntime(payload.runtime || { state: 'idle', detail: '' });
     state.sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
     renderSessionList();
@@ -1443,6 +1455,9 @@
         break;
       case 'status':
         applyStatus(payload);
+        break;
+      case 'activity':
+        applyActivity(payload);
         break;
       case 'sessions':
         state.sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
@@ -1692,6 +1707,7 @@
       emptyState: byId('empty-state'),
       working: byId('working'),
       workingElapsed: byId('working-elapsed'),
+      workingText: byId('working-text'),
       jumpLatest: byId('jump-latest'),
       composer: byId('composer'),
       input: byId('composer-input'),

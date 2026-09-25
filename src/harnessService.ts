@@ -24,9 +24,12 @@ import {
   type RuntimeState,
 } from './dsh/runtime'
 import {
+  activityKey,
   buildTranscriptDigest,
   CONTINUATION_SEED_LIMIT,
+  describeActivity,
   TranscriptReducer,
+  type AgentActivity,
   type ChatItem,
   type TranscriptMutation,
 } from './dsh/transcript'
@@ -75,10 +78,15 @@ export interface SessionSnapshot {
   restored: boolean
   /** Cumulative token use across the restored transcript. */
   usage: Usage
+  /** What the agent is doing right now. */
+  activity: AgentActivity
+  /** One-line rendering of {@link activity}; empty when idle. */
+  activityLabel: string
 }
 
 export type ServiceEvent =
   | { type: 'mutations'; sessionId: string; mutations: TranscriptMutation[] }
+  | { type: 'activity'; sessionId: string; activity: AgentActivity; label: string }
   | { type: 'status'; sessionId: string; running: boolean }
   | { type: 'session'; session: SessionSnapshot }
   | { type: 'sessions'; sessions: SessionSummary[] }
@@ -143,6 +151,8 @@ export class HarnessService implements Disposable {
   #needsSeed = new Set<string>()
   /** Pending cosmetic reveal timers, keyed by assistant item id. */
   #reveals = new Map<string, NodeJS.Timeout>()
+  /** Last published activity, so only real changes reach the views. */
+  #activityKey = 'idle'
   /** What the runtime reported for the last request on the active session. */
   #resolvedRoute: { provider: string; model: string; reasoningEffort?: string; maxTokens?: number; contextWindow?: number } | undefined
 
@@ -201,6 +211,8 @@ export class HarnessService implements Disposable {
       running: this.#running.has(this.#session.id),
       restored: this.#session.restored,
       usage: this.#usage.get(this.#session.id) ?? EMPTY_USAGE,
+      activity: this.#reducer.activity,
+      activityLabel: describeActivity(this.#reducer.activity),
     }
   }
 
@@ -247,6 +259,12 @@ export class HarnessService implements Disposable {
       callbacks: {
         onSessionEvent: (notification) => this.#onSessionEvent(notification.sessionId, notification.event),
         onSessionStatus: (notification) => this.#onSessionStatus(notification.sessionId, notification.status),
+        onSubagentStarted: (notification) => {
+          if (notification.parentSessionId !== this.#session.id) return
+          const mutations = this.#reducer.applySubagentStarted({ childSessionId: notification.childSessionId })
+          this.#afterMutations(mutations)
+          this.#publishActivity()
+        },
         onSubagentFinished: (notification) => {
           if (notification.parentSessionId !== this.#session.id) return
           const mutations = this.#reducer.applySubagentFinished({
@@ -256,12 +274,14 @@ export class HarnessService implements Disposable {
             ...(notification.lastAssistantMessage ? { lastAssistantMessage: notification.lastAssistantMessage } : {}),
           })
           this.#afterMutations(mutations)
+          this.#publishActivity()
         },
         onExit: (info) => {
           if (info.expected) return
           const detail = info.stderrTail.trim().slice(-1200)
           this.#lastRuntimeDetail = `exited with code ${info.code ?? 'null'}${detail ? `: ${detail}` : ''}`
           log(`runtime exited unexpectedly (code ${info.code}, signal ${info.signal})\n${detail}`)
+          this.#clearActivity()
           this.#running.clear()
           const mutations = this.#reducer.failRunningTools(
             `The runtime exited before this tool finished (exit code ${info.code ?? 'null'}).`,
@@ -486,6 +506,7 @@ export class HarnessService implements Disposable {
   async newSession(): Promise<SessionSnapshot> {
     await this.#saveNow()
     this.#cancelReveals()
+    this.#clearActivity()
     const id = randomUUID()
     this.#reducer = this.#createReducer(id)
     this.#session = { id, title: 'New session', createdAt: Date.now(), updatedAt: Date.now(), restored: false }
@@ -498,6 +519,7 @@ export class HarnessService implements Disposable {
   async openSession(id: string): Promise<SessionSnapshot> {
     await this.#saveNow()
     this.#cancelReveals()
+    this.#clearActivity()
     const stored = this.#store.load(id)
     const existing = this.#store.list().find((entry) => entry.id === id)
     if (!stored && !existing) {
@@ -588,6 +610,7 @@ export class HarnessService implements Disposable {
     await this.#runtime.interrupt('stopped by the user')
     this.#cancelReveals()
     this.#running.clear()
+    this.#clearActivity()
     const mutations = this.#reducer.failRunningTools('The turn was stopped before this tool finished.')
     mutations.push(this.#reducer.notice('warn', 'Stopped. The session is saved in this repository; send another message to continue it.'))
     this.#afterMutations(mutations)
@@ -603,6 +626,7 @@ export class HarnessService implements Disposable {
       this.#runtime = undefined
     }
     this.#running.clear()
+    this.#clearActivity()
     this.#emit({ type: 'status', sessionId: this.#session.id, running: false })
     await this.ensureRuntime()
   }
@@ -641,6 +665,7 @@ export class HarnessService implements Disposable {
     if (sessionId !== this.#session.id) return
     this.#trackRoute(event)
     const mutations = this.#reducer.apply(event)
+    this.#publishActivity()
     if (event.type === 'session/title') {
       const title = this.#reducer.title
       if (title && title !== this.#session.title) {
@@ -649,6 +674,21 @@ export class HarnessService implements Disposable {
       }
     }
     if (mutations.length > 0) this.#afterMutations(mutations)
+  }
+
+  /** Emit the activity line when it actually changed. */
+  #publishActivity(): void {
+    const activity = this.#reducer.activity
+    const key = activityKey(activity)
+    if (key === this.#activityKey) return
+    this.#activityKey = key
+    this.#emit({ type: 'activity', sessionId: this.#session.id, activity, label: describeActivity(activity) })
+  }
+
+  /** Clear the activity line after a stop, an exit, or a session switch. */
+  #clearActivity(): void {
+    this.#reducer.resetActivity()
+    this.#publishActivity()
   }
 
   /** Fold the runtime's own request description into {@link resolvedRoute}. */

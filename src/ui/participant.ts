@@ -107,7 +107,15 @@ async function handleRequest(
   })
   const rendered = new Map<string, string>()
 
+  let lastActivity = ''
   const subscription = service.onEvent((event) => {
+    if (event.type === 'activity') {
+      if (event.sessionId === sessionId && event.label && event.label !== lastActivity) {
+        lastActivity = event.label
+        stream.progress(event.label)
+      }
+      return
+    }
     if (event.type === 'status') {
       if (event.sessionId === sessionId && !event.running && !finished) {
         finished = true

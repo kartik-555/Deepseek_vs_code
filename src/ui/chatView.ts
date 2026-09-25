@@ -45,6 +45,8 @@ function emptySnapshot(): SessionSnapshot {
     running: false,
     restored: false,
     usage: EMPTY_USAGE,
+    activity: { kind: 'idle' },
+    activityLabel: '',
   }
 }
 
@@ -127,6 +129,17 @@ export class ChatView implements WebviewViewProvider, Disposable {
       case 'status':
         void view.webview.postMessage({ type: 'status', payload: { sessionId: event.sessionId, running: event.running } })
         return
+      case 'activity':
+        void view.webview.postMessage({
+          type: 'activity',
+          payload: {
+            sessionId: event.sessionId,
+            label: event.label,
+            kind: event.activity.kind,
+            toolName: event.activity.kind === 'tool' ? event.activity.name : '',
+          },
+        })
+        return
       case 'session':
         void view.webview.postMessage({ type: 'session', payload: { session: event.session } })
         return
@@ -174,6 +187,7 @@ export class ChatView implements WebviewViewProvider, Disposable {
         },
         resolvedRoute: describeRoute(service),
         sessions: service?.sessions ?? [],
+        activity: service?.snapshot().activityLabel ?? '',
         session: service?.snapshot() ?? emptySnapshot(),
       },
     })

@@ -205,6 +205,17 @@ check('a removed item disappears', !transcript.textContent.includes('<img src=x'
 send('status', { sessionId: 's-1', running: true })
 check('the stop button replaces send while running', $('btn-stop').hidden === false && $('btn-send').hidden === true)
 check('the working indicator appears while running', $('working').hidden === false)
+check('the working strip falls back to a plain label', text('working-text') === 'Working', text('working-text'))
+
+send('activity', { sessionId: 's-1', label: 'Running: ls -la', kind: 'tool', toolName: 'bash' })
+check('the activity line says what the agent is doing', text('working-text') === 'Running: ls -la', text('working-text'))
+
+send('activity', { sessionId: 's-1', label: 'Reading: src/runtime.ts', kind: 'tool', toolName: 'read' })
+check('the activity line follows the next tool', text('working-text') === 'Reading: src/runtime.ts', text('working-text'))
+
+send('activity', { sessionId: 's-1', label: '', kind: 'idle', toolName: '' })
+check('an empty activity keeps the strip readable', text('working-text') === 'Working', text('working-text'))
+send('activity', { sessionId: 's-1', label: 'Thinking (step 2)…', kind: 'thinking', toolName: '' })
 send('status', { sessionId: 's-1', running: false })
 check('the send button returns when idle', $('btn-stop').hidden === true && $('btn-send').hidden === false)
 

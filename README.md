@@ -27,11 +27,31 @@ VS Code  ─┬─ sidebar chat  (webview)      ─┐
 | Surface | Where | What it is for |
 | --- | --- | --- |
 | **Sidebar chat** | DeepSeek Harness icon in the activity bar | The primary panel: streaming transcript, reasoning, tool timeline with collapsible output, image paste, session list, token usage, and a click-to-change model selector |
-| **`@dsh` chat participant** | VS Code's own Chat view | Ask the same repository agent without leaving the Chat view; `@dsh /explain`, `/fix`, `/test`, `/new` |
+| **`@dsh` chat participant** | VS Code's own Chat view | Ask the same repository agent without leaving the Chat view; `@dsh /explain`, `/fix`, `/test`, `/new`. Tool calls and the current activity appear as progress lines |
 | **DSH web UI** | `DSH: Open the DSH Web UI for this Repository` | The full official web interface, sharing this repository's session root — the only surface that can *reopen* a past session |
 | **One-shot tasks** | `DSH: Run a One-Shot Task in the Terminal` | `dsh --profile headless "…"` in a terminal, for scripted or unattended work |
 | **Session tree** | Beside the chat | Everything ever asked in this repository, one click to reopen |
 | **Chat participant in the LM API** | `@dsh` | Same agent, same session, native Copilot-style UX |
+
+### Following along while the agent works
+
+Both chat surfaces say what is happening, not just that something is. The strip
+above the composer in the sidebar — and a progress line in the Chat view —
+tracks the session log as it lands:
+
+| During | The strip reads |
+| --- | --- |
+| The model is being asked | `Thinking (step 2)…` |
+| A tool is running | `Running: ls -la`, `Reading: src/dsh/runtime.ts`, `Editing: src/ui/chatView.ts`, `Searching: selectModel`, `Searching files: **/*.ts` |
+| A subagent was delegated to | `Waiting for a subagent…` |
+| The answer is being written | `Writing the answer…` |
+| Turn finished | *(strip disappears, elapsed time stops)* |
+
+Below it, every tool becomes a card: a spinner while it runs, a check or a cross
+when it lands, its arguments and output collapsible, and **Open**/**Diff**
+buttons for the files it touched. The line is derived from committed events
+only, so a step that issues tool calls never claims to be "writing the answer",
+and nothing is shown that the runtime did not report.
 
 ## Quick start (if `dsh` already works on this machine)
 
@@ -507,8 +527,11 @@ message path, both storage locations, and shutdown. The offline suite also
 asserts that credential-shaped strings are redacted and that ordinary text is
 left alone.
 `test:webview` loads `media/chat.*` in jsdom and asserts what a user would see
-for bootstrap, mutations, updates, removal, escaping, run state, the composer,
-and every button. Together they cover both ends of the host <-> webview contract without a GUI.
+for bootstrap, mutations, updates, removal, escaping, run state, the live
+activity line, the composer, and every button. The offline suite folds a whole
+synthetic turn through the reducer and checks the activity line at each point;
+the runtime check asserts it named a real tool during a real turn and cleared at
+the end. Together they cover both ends of the host <-> webview contract without a GUI.
 
 `test:e2e` spends a few hundred tokens: it asks the agent to list a directory and
 then checks that the transcript, the tool card, the workspace, and the
@@ -541,7 +564,8 @@ upgrading the harness.
   response appears when that step commits; the UI shows live tool activity and an
   elapsed timer meanwhile, and `dshVscode.animateChunks` can reveal a finished
   answer progressively. The official web UI is the surface for true token-level
-  streaming.
+  streaming. The activity line is likewise per step: it can say `Thinking (step
+  3)…` but not what the model is thinking about.
 - **No in-editor approval prompts.** Approvals fail closed (see Permissions).
 - **No mid-turn cancel at the protocol level.** Stop is a runtime restart.
 - **Continuation is a digest, not replay.** Very long conversations lose old

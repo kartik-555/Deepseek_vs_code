@@ -94,6 +94,7 @@ Sent once after the webview signals `ready`.
       permissionMode: string
     }
     sessions: SessionSummary[]
+    activity: string          // current activity line, '' when idle
     session: SessionSnapshot  // the active session, already resumed
   }
 }
@@ -122,6 +123,19 @@ A turn started or finished.
 
 ```ts
 { type: 'status'; payload: { sessionId: string; running: boolean } }
+```
+
+### `activity`
+
+What the agent is doing right now, derived by the host from the session log: a
+step began (*Thinking*), a tool call is running (*Running: ls -la*, *Reading:
+src/a.ts*, *Editing: …*, *Searching: …*, *Delegating to a subagent…*), or an
+answer is being written. It is sent only when the line actually changes, and it
+is `idle` (empty label) when nothing is running. Render it as the working
+strip's text; keep a plain *Working* fallback for an idle-but-running moment.
+
+```ts
+{ type: 'activity'; payload: { sessionId: string; label: string; kind: 'idle' | 'thinking' | 'tool' | 'responding' | 'delegating'; toolName: string } }
 ```
 
 ### `sessions`
@@ -291,7 +305,7 @@ agree on them.
   `meta-line`, `model-label`, `permission-label`, `btn-refresh-sessions`,
   `btn-close-sessions`, `btn-diagnostics`, `btn-restart-runtime`,
   `btn-select-folder` (posted when `multiRoot` is true or no folder is open),
-  `working`, `working-elapsed`, and `jump-latest`.
+  `working`, `working-text`, `working-elapsed`, and `jump-latest`.
 - **Animation.** With `animateChunks` on, the host reveals a finished answer by
   sending `update` mutations that replace an assistant item's `text` with
   progressively longer prefixes, ending with the complete text. The webview

@@ -68,6 +68,78 @@ export type ChatItem =
       text: string
     }
 
+/**
+ * What the agent is doing right now.
+ *
+ * The SDK wire reports committed work, not plans, so this is derived from the
+ * events themselves: a step start means the model is being asked, a tool call
+ * means that tool is running until its result lands, and a turn end means
+ * nothing is running. It is deliberately coarse — it says what is happening,
+ * never guesses what happens next.
+ */
+export type AgentActivity =
+  | { kind: 'idle' }
+  | { kind: 'thinking'; at: number; turn: number; step: number }
+  | {
+      kind: 'tool'
+      at: number
+      turn: number
+      step: number
+      callId: string
+      name: string
+      summary: string
+    }
+  | { kind: 'responding'; at: number; turn: number; step: number }
+  | { kind: 'delegating'; at: number; childSessionId: string; provider?: string }
+
+/** Verb per tool, so the strip reads like a status line rather than a log. */
+const TOOL_VERBS: Record<string, string> = {
+  read: 'Reading',
+  write: 'Writing',
+  edit: 'Editing',
+  multi_edit: 'Editing',
+  bash: 'Running',
+  pwsh: 'Running',
+  glob: 'Searching files',
+  grep: 'Searching',
+  task: 'Delegating to a subagent',
+  todo_write: 'Updating the plan',
+  exit_plan_mode: 'Presenting the plan',
+  ask_user_question: 'Asking a question',
+  job_output: 'Collecting a job',
+  job_kill: 'Stopping a job',
+}
+
+/** One-line description of an activity, for the chat strip and progress. */
+export function describeActivity(activity: AgentActivity): string {
+  switch (activity.kind) {
+    case 'thinking':
+      return `Thinking (step ${activity.step})…`
+    case 'responding':
+      return 'Writing the answer…'
+    case 'delegating':
+      return 'Waiting for a subagent…'
+    case 'tool': {
+      const verb = TOOL_VERBS[activity.name] ?? `Running ${activity.name}`
+      const detail = activity.summary.replace(/\s+/g, ' ').trim()
+      return detail.length > 0 ? `${verb}: ${detail}` : `${verb}…`
+    }
+    case 'idle':
+    default:
+      return ''
+  }
+}
+
+/** Stable key for change detection, so the same activity is not re-published. */
+export function activityKey(activity: AgentActivity): string {
+  switch (activity.kind) {
+    case 'tool':
+      return `tool|${activity.callId}|${activity.summary}`
+    default:
+      return activity.kind
+  }
+}
+
 export type TranscriptMutation =
   | { op: 'append'; item: ChatItem }
   | { op: 'update'; id: string; patch: Record<string, unknown> }
@@ -180,6 +252,7 @@ export class TranscriptReducer {
   readonly #toolItemByCallId = new Map<string, string>()
   readonly #pendingEchoes: { id: string; text: string }[] = []
   #title: string | undefined
+  #activity: AgentActivity = { kind: 'idle' }
   #echoCounter = 0
 
   constructor(private readonly options: ReducerOptions) {}
@@ -190,6 +263,16 @@ export class TranscriptReducer {
 
   get title(): string | undefined {
     return this.#title
+  }
+
+  /** What the agent is reported to be doing right now. */
+  get activity(): AgentActivity {
+    return this.#activity
+  }
+
+  /** Clear the activity line, for a stop or a runtime that went away. */
+  resetActivity(): void {
+    this.#activity = { kind: 'idle' }
   }
 
   /** Replace the whole transcript, for reopening a stored session. */
@@ -229,6 +312,7 @@ export class TranscriptReducer {
 
   /** Apply one raw event; returns the mutations a view must render. */
   apply(event: SessionEvent): TranscriptMutation[] {
+    this.#trackActivity(event)
     switch (event.type) {
       case 'session/title':
         return this.#applyTitle(event)
@@ -247,6 +331,94 @@ export class TranscriptReducer {
       default:
         return []
     }
+  }
+
+  /**
+   * Fold the event stream into {@link activity}.
+   *
+   * Only events that prove work exists move the line: a step start, a tool call,
+   * an assistant message that answers rather than calling a tool, and a turn
+   * end. Anything else leaves it alone, so the strip never claims progress the
+   * runtime did not report.
+   */
+  #trackActivity(event: SessionEvent): void {
+    switch (event.type) {
+      case 'turn/start': {
+        const turn = (event.data as { turn?: number } | undefined)?.turn ?? 0
+        this.#activity = { kind: 'thinking', at: event.time, turn, step: 0 }
+        return
+      }
+      case 'step/start': {
+        const data = event.data as { turn?: number; step?: number } | undefined
+        this.#activity = { kind: 'thinking', at: event.time, turn: data?.turn ?? 0, step: data?.step ?? 0 }
+        return
+      }
+      case 'tool/call': {
+        const data = event.data as ToolCallData | undefined
+        if (!data?.callId) return
+        this.#activity = {
+          kind: 'tool',
+          at: event.time,
+          turn: data.turn ?? 0,
+          step: data.step ?? 0,
+          callId: data.callId,
+          name: data.name ?? 'tool',
+          summary: summarizeToolCall(data.name ?? 'tool', data.arguments ?? '{}'),
+        }
+        return
+      }
+      case 'tool/result': {
+        // The result is in; the model is asked again next.
+        const step = this.#activity.kind === 'tool' ? this.#activity.step : 0
+        const turn = this.#activity.kind === 'tool' ? this.#activity.turn : 0
+        this.#activity = { kind: 'thinking', at: event.time, turn, step }
+        return
+      }
+      case 'assistant/message': {
+        const data = event.data as AssistantMessageData | undefined
+        const content = data?.message?.content ?? []
+        const callsTool = content.some((block) => block?.type === 'tool-call')
+        // A step that only issues tool calls is not an answer; its tool call
+        // arrives next, so stay on the thinking line instead of claiming text.
+        if (callsTool) return
+        if (blockText(content).trim().length === 0) return
+        this.#activity = {
+          kind: 'responding',
+          at: event.time,
+          turn: data?.turn ?? 0,
+          step: data?.step ?? 0,
+        }
+        return
+      }
+      case 'turn/end':
+        this.#activity = { kind: 'idle' }
+        return
+      default:
+        return
+    }
+  }
+
+  /** Note that a child session started, so the strip can say so. */
+  applySubagentStarted(info: { childSessionId: string; provider?: string }): TranscriptMutation[] {
+    this.#activity = {
+      kind: 'delegating',
+      at: Date.now(),
+      childSessionId: info.childSessionId,
+      ...(info.provider ? { provider: info.provider } : {}),
+    }
+    const id = `subagent:${info.childSessionId}`
+    if (this.#items.some((item) => item.id === id)) return []
+    const item: ChatItem = {
+      id,
+      kind: 'subagent',
+      at: Date.now(),
+      childSessionId: info.childSessionId,
+      provider: info.provider ?? 'subagent',
+      status: 'running',
+      summary: '',
+    }
+    this.#items.push(item)
+    return [{ op: 'append', item }]
   }
 
   /** Record a subagent outcome; the participants own their own child sessions. */

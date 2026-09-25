@@ -27,7 +27,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync,
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { HarnessRuntime, probeRoute, PROBE_SESSION_PREFIX, ResponseError } from '../src/dsh/runtime'
-import { TranscriptReducer, type ChatItem } from '../src/dsh/transcript'
+import { activityKey, describeActivity, TranscriptReducer, type ChatItem } from '../src/dsh/transcript'
 import { buildTranscriptDigest } from '../src/dsh/transcript'
 import { revealSlices } from '../src/reveal'
 import { candidatesFor, formatContextWindow, parseSupportedModels, PROVIDER_CANDIDATES, routeKey } from '../src/models'
@@ -103,8 +103,13 @@ async function runTurn(
   reducer: TranscriptReducer,
   sessionId: string,
   text: string,
-): Promise<{ items: ChatItem[]; mutations: number }> {
+): Promise<{ items: ChatItem[]; mutations: number; activity: string[] }> {
   let mutations = 0
+  const activity: string[] = []
+  const noteActivity = () => {
+    const label = describeActivity(reducer.activity)
+    if (label && activity[activity.length - 1] !== label) activity.push(label)
+  }
   let sawRunning = false
   let settled = false
   let resolveIdle: () => void = () => undefined
@@ -131,6 +136,7 @@ async function runTurn(
     unsubscribe?.(sessionIdFromEvent, event)
     if (sessionIdFromEvent !== sessionId) return
     mutations += reducer.apply(event).length
+    noteActivity()
   }
 
   await runtime.prompt(sessionId, [{ type: 'text', text }])
@@ -138,7 +144,7 @@ async function runTurn(
   clearTimeout(timeout)
   eventTap = undefined
   statusHandler = previous
-  return { items: [...reducer.items], mutations }
+  return { items: [...reducer.items], mutations, activity }
 }
 
 function readFileSyncText(path: string): string {
@@ -397,6 +403,53 @@ async function main(): Promise<void> {
   check('leaves ordinary text untouched', redactSecrets(ordinary) === ordinary, redactSecrets(ordinary))
   check('redaction is idempotent', redactSecrets(redactSecrets('sk-abcdefghijklmnopqrstuvwxyz')) === redactSecrets('sk-abcdefghijklmnopqrstuvwxyz'))
 
+  // --- part 0e: the live activity line ------------------------------------
+  // Both chat surfaces read this line, so fold a whole turn through the reducer
+  // and check what a user would see at each point.
+  const activityReducer = new TranscriptReducer({ sessionId: 'activity' })
+  const step = (type: string, data: unknown, time: number) => {
+    activityReducer.apply({ type, seq: time, time, data })
+    return describeActivity(activityReducer.activity)
+  }
+  check('an idle session shows nothing', describeActivity(activityReducer.activity) === '')
+  check('a new turn reports thinking', step('turn/start', { turn: 1 }, 1).startsWith('Thinking'), step('turn/start', { turn: 1 }, 1))
+  check('a step reports which step', step('step/start', { turn: 1, step: 2 }, 2) === 'Thinking (step 2)…')
+  const toolLine = step(
+    'tool/call',
+    { turn: 1, step: 2, callId: 'c1', name: 'bash', arguments: '{"command":"ls -la"}' },
+    3,
+  )
+  check('a running tool names the tool and its target', toolLine === 'Running: ls -la', toolLine)
+  check(
+    'a tool result returns the line to thinking',
+    step('tool/result', { turn: 1, step: 2, message: { id: 'm', role: 'tool', toolCallId: 'c1', content: [] } }, 4).startsWith('Thinking'),
+  )
+  check(
+    'a step that only calls tools does not claim an answer',
+    step('assistant/message', { turn: 1, step: 2, message: { id: 'a1', role: 'assistant', content: [{ type: 'tool-call', id: 'c1', name: 'read', arguments: '{"file_path":"src/a.ts"}' }] } }, 5).startsWith('Thinking'),
+  )
+  check(
+    'tool verbs read like a status line',
+    describeActivity({ kind: 'tool', at: 0, turn: 1, step: 1, callId: 'c', name: 'read', summary: 'src/a.ts' }) ===
+      'Reading: src/a.ts',
+  )
+  check(
+    'an answer reports writing',
+    step('assistant/message', { turn: 1, step: 3, message: { id: 'a2', role: 'assistant', content: [{ type: 'text', text: 'here you go' }] } }, 6) ===
+      'Writing the answer…',
+  )
+  check('the turn end clears the line', step('turn/end', { turn: 1, reason: { kind: 'completed' } }, 7) === '')
+  check(
+    'activity keys differ per call so a repeat is republished',
+    activityKey({ kind: 'tool', at: 0, turn: 1, step: 1, callId: 'a', name: 'bash', summary: 'ls' }) !==
+      activityKey({ kind: 'tool', at: 0, turn: 1, step: 1, callId: 'b', name: 'bash', summary: 'ls' }),
+  )
+  check(
+    'a subagent start says what is happening and adds a card',
+    activityReducer.applySubagentStarted({ childSessionId: 'child-1' }).length === 1 &&
+      describeActivity(activityReducer.activity) === 'Waiting for a subagent…',
+  )
+
   check('short answers are revealed whole, not animated', revealSlices('done').length === 0)
   const plan = revealSlices('x'.repeat(1000))
   check('a long answer is revealed in bounded steps', plan.length > 2 && plan.length <= 48, `${plan.length} steps`)
@@ -430,6 +483,17 @@ async function main(): Promise<void> {
   check('the tool card used the active workspace', (tool?.output ?? '').includes('sample.txt') || (tool?.output ?? '').includes('total'), tool?.output?.slice(0, 120))
   const assistant = [...turn1.items].reverse().find((item): item is Extract<ChatItem, { kind: 'assistant' }> => item.kind === 'assistant')
   check('the answer names the stored value', (assistant?.text ?? '').includes('4271'), assistant?.text)
+  check(
+    'the live activity line named the tool while it ran',
+    turn1.activity.some((line) => /^(Running|Reading|Searching|Writing|Editing):/.test(line)),
+    JSON.stringify(turn1.activity),
+  )
+  check(
+    'the activity line reported thinking before the tool ran',
+    turn1.activity.some((line) => line.startsWith('Thinking')),
+    JSON.stringify(turn1.activity),
+  )
+  check('the activity line is empty once the turn ends', describeActivity(first.reducer.activity) === '')
   check(
     'the session log landed in this repository\'s own store, outside the working tree',
     existsSync(join(first.storeRoot, 'sessions')) && !first.storeRoot.startsWith(workspace),
