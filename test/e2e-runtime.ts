@@ -103,6 +103,7 @@ async function runTurn(
   reducer: TranscriptReducer,
   sessionId: string,
   text: string,
+  options: { echo?: boolean; contextText?: string } = {},
 ): Promise<{ items: ChatItem[]; mutations: number; activity: string[] }> {
   let mutations = 0
   const activity: string[] = []
@@ -139,7 +140,17 @@ async function runTurn(
     noteActivity()
   }
 
-  await runtime.prompt(sessionId, [{ type: 'text', text }])
+  // Reproduce the extension's send path exactly: an optimistic placeholder
+  // first, then the same blocks the service sends (context prepended, the user
+  // text last), so the placeholder must be replaced by the runtime's own item.
+  if (options.echo) {
+    reducer.echoUser({ displayText: text, modelText: text, context: options.contextText ?? '', images: 0 })
+  }
+  const blocks = [
+    ...(options.contextText ? [{ type: 'text' as const, text: `${options.contextText}\n\n---\n\n` }] : []),
+    { type: 'text' as const, text },
+  ]
+  await runtime.prompt(sessionId, blocks)
   await idle
   clearTimeout(timeout)
   eventTap = undefined
@@ -450,6 +461,96 @@ async function main(): Promise<void> {
       describeActivity(activityReducer.activity) === 'Waiting for a subagent…',
   )
 
+  // --- part 0f: one prompt must produce exactly one user bubble -----------
+  // Both the queue event and the transcript event describe the same user
+  // message, and the optimistic placeholder must be replaced by the runtime's
+  // own item rather than sitting beside it.
+  const inboxEvent = (text: string, id: string) => ({
+    type: 'agent/inbox/spliced',
+    seq: 3,
+    time: 3,
+    data: { target: 'next-turn', inserted: [{ id, role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text }] }] },
+  })
+  const messageEvent = (text: string, id: string) => ({
+    type: 'user/message',
+    seq: 8,
+    time: 8,
+    data: { id, role: 'user', source: { kind: 'user' }, content: text.length > 0 ? [{ type: 'text', text }] : [] },
+  })
+  const userItems = (reducer: TranscriptReducer) => reducer.items.filter((item) => item.kind === 'user')
+
+  const plainEcho = new TranscriptReducer({ sessionId: 'echo' })
+  plainEcho.echoUser({ displayText: 'hello there', modelText: 'hello there', context: '', images: 0 })
+  const plainMutations = [
+    ...plainEcho.apply(inboxEvent('hello there', 'u1') as never),
+    ...plainEcho.apply(messageEvent('hello there', 'u1') as never),
+  ]
+  check('one prompt yields exactly one user bubble', userItems(plainEcho).length === 1, `${userItems(plainEcho).length}`)
+  check('the bubble keeps the runtime id, not the placeholder id', userItems(plainEcho)[0]?.id === 'u1', userItems(plainEcho)[0]?.id)
+  check(
+    'the placeholder is removed rather than left beside the real item',
+    plainMutations.some((mutation) => mutation.op === 'remove') &&
+      plainMutations.filter((mutation) => mutation.op === 'append').length === 1,
+    JSON.stringify(plainMutations.map((mutation) => mutation.op)),
+  )
+
+  const contextEcho = new TranscriptReducer({ sessionId: 'echo' })
+  contextEcho.echoUser({ displayText: 'hello there', modelText: 'hello there', context: 'src/a.ts:1', images: 0 })
+  const withContextText = 'File: src/a.ts\n```ts\nconst x = 1\n```\n\n---\n\nhello there'
+  contextEcho.apply(inboxEvent(withContextText, 'u2') as never)
+  contextEcho.apply(messageEvent(withContextText, 'u2') as never)
+  check(
+    'attached editor context does not duplicate the bubble',
+    userItems(contextEcho).length === 1 && userItems(contextEcho)[0]?.id === 'u2',
+    `${userItems(contextEcho).length}: ${userItems(contextEcho).map((item) => item.id).join(', ')}`,
+  )
+
+  const seedEcho = new TranscriptReducer({ sessionId: 'echo' })
+  seedEcho.echoUser({ displayText: 'and now?', modelText: 'and now?', context: '', images: 0 })
+  const seededText = 'Earlier turns of this conversation…\n\n---\n\nand now?'
+  seedEcho.apply(messageEvent(seededText, 'u3') as never)
+  check('a continuation seed does not duplicate the bubble', userItems(seedEcho).length === 1, `${userItems(seedEcho).length}`)
+
+  const imageEcho = new TranscriptReducer({ sessionId: 'echo' })
+  imageEcho.echoUser({ displayText: '[1 image]', modelText: '', context: '', images: 1 })
+  imageEcho.apply(inboxEvent('', 'u4') as never)
+  check('an image-only turn does not duplicate the bubble', userItems(imageEcho).length === 1, `${userItems(imageEcho).length}`)
+  check('an image-only bubble keeps its label', userItems(imageEcho)[0]?.text === '[1 image]', userItems(imageEcho)[0]?.text)
+
+  const twiceEcho = new TranscriptReducer({ sessionId: 'echo' })
+  twiceEcho.echoUser({ displayText: 'same', modelText: 'same', context: '', images: 0 })
+  twiceEcho.echoUser({ displayText: 'same', modelText: 'same', context: '', images: 0 })
+  twiceEcho.apply(inboxEvent('same', 'u5') as never)
+  twiceEcho.apply(inboxEvent('same', 'u6') as never)
+  check('two identical prompts stay two bubbles', userItems(twiceEcho).length === 2, `${userItems(twiceEcho).length}`)
+
+  const injected = new TranscriptReducer({ sessionId: 'echo' })
+  injected.echoUser({ displayText: 'hi', modelText: 'hi', context: '', images: 0 })
+  injected.apply({
+    type: 'user/message',
+    seq: 9,
+    time: 9,
+    data: { id: 'ctx', role: 'user', source: { kind: 'runtime-context' }, content: [{ type: 'text', text: 'Current runtime context…' }] },
+  } as never)
+  check('injected runtime context is still not a user bubble', userItems(injected).length === 1, `${userItems(injected).length}`)
+
+  const repeatAnswer = new TranscriptReducer({ sessionId: 'echo' })
+  const answerEvent = {
+    type: 'assistant/message',
+    seq: 14,
+    time: 14,
+    data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: 'done' }] } },
+  }
+  const firstAppend = repeatAnswer.apply(answerEvent as never)
+  const secondAppend = repeatAnswer.apply(answerEvent as never)
+  check(
+    'a re-emitted assistant message updates instead of duplicating',
+    firstAppend[0]?.op === 'append' &&
+      secondAppend[0]?.op === 'update' &&
+      repeatAnswer.items.filter((item) => item.kind === 'assistant').length === 1,
+    JSON.stringify([firstAppend[0]?.op, secondAppend[0]?.op]),
+  )
+
   check('short answers are revealed whole, not animated', revealSlices('done').length === 0)
   const plan = revealSlices('x'.repeat(1000))
   check('a long answer is revealed in bounded steps', plan.length > 2 && plan.length <= 48, `${plan.length} steps`)
@@ -472,9 +573,24 @@ async function main(): Promise<void> {
     first.reducer,
     sessionId,
     'Use the bash tool to run `ls` in this workspace, then reply with exactly this sentence: stored 4271',
+    {
+      echo: true,
+      contextText: 'Active file: sample.txt\nLanguage: plaintext',
+    },
   )
   const kinds = turn1.items.map((item) => item.kind)
   check('the transcript contains the user turn', kinds.includes('user'))
+  const userBubbles = turn1.items.filter((item) => item.kind === 'user')
+  check(
+    'one prompt with editor context produces exactly one user bubble',
+    userBubbles.length === 1,
+    `${userBubbles.length}: ${userBubbles.map((item) => item.id).join(', ')}`,
+  )
+  check(
+    'the surviving bubble carries the runtime id',
+    !String(userBubbles[0]?.id ?? '').startsWith('local:'),
+    userBubbles[0]?.id,
+  )
   check('the transcript contains an assistant answer', kinds.includes('assistant'))
   check('the transcript contains a tool card', kinds.includes('tool'), kinds.join(','))
   const tool = turn1.items.find((item): item is Extract<ChatItem, { kind: 'tool' }> => item.kind === 'tool')
@@ -483,6 +599,11 @@ async function main(): Promise<void> {
   check('the tool card used the active workspace', (tool?.output ?? '').includes('sample.txt') || (tool?.output ?? '').includes('total'), tool?.output?.slice(0, 120))
   const assistant = [...turn1.items].reverse().find((item): item is Extract<ChatItem, { kind: 'assistant' }> => item.kind === 'assistant')
   check('the answer names the stored value', (assistant?.text ?? '').includes('4271'), assistant?.text)
+  check(
+    'the answer appears exactly once',
+    turn1.items.filter((item) => item.kind === 'assistant' && item.text.includes('4271')).length === 1,
+    `${turn1.items.filter((item) => item.kind === 'assistant' && item.text.includes('4271')).length}`,
+  )
   check(
     'the live activity line named the tool while it ran',
     turn1.activity.some((line) => /^(Running|Reading|Searching|Writing|Editing):/.test(line)),
@@ -539,9 +660,15 @@ async function main(): Promise<void> {
     continuedReducer,
     continuationId,
     `${seeded}\n\n---\n\nWhat number did I ask you to store? Reply with just the digits.`,
+    { echo: true },
   )
   const continuedAnswer = [...turn3.items].reverse().find((item): item is Extract<ChatItem, { kind: 'assistant' }> => item.kind === 'assistant')
   check('the digest lets a fresh session answer about earlier turns', (continuedAnswer?.text ?? '').includes('4271'), continuedAnswer?.text?.slice(0, 200))
+  check(
+    'a digest-prefixed prompt still produces exactly one user bubble',
+    turn3.items.filter((item) => item.kind === 'user').length === 1,
+    `${turn3.items.filter((item) => item.kind === 'user').length}`,
+  )
   writeFileSync(join(scratch, 'transcript-part3.json'), JSON.stringify(turn3.items, null, 2), 'utf8')
 
   // --- part 4: a different session id stays isolated ----------------------

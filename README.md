@@ -526,6 +526,12 @@ document and its CSP, the bootstrap payload, editor context, the model picker's
 message path, both storage locations, and shutdown. The offline suite also
 asserts that credential-shaped strings are redacted and that ordinary text is
 left alone.
+The offline suite also folds the exact event shapes a real session produced —
+including the duplicate pair (`agent/inbox/spliced` plus `user/message`) that
+describes one prompt — and asserts that one prompt yields exactly one bubble, for
+plain text, editor-context-prefixed text, a digest-prefixed continuation, an
+image-only turn, and two identical prompts in a row.
+
 `test:webview` loads `media/chat.*` in jsdom and asserts what a user would see
 for bootstrap, mutations, updates, removal, escaping, run state, the live
 activity line, the composer, and every button. The offline suite folds a whole

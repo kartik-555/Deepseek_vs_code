@@ -566,7 +566,16 @@ export class HarnessService implements Disposable {
 
     const contextLabel = input.contextLabel ?? (input.context ? 'editor context' : '')
     const displayText = text.trim().length > 0 ? text : `[${images.length} image${images.length === 1 ? '' : 's'}]`
-    const mutations = [this.#reducer.echoUser(displayText, contextLabel, images.length)]
+    const mutations = [
+      this.#reducer.echoUser({
+        displayText,
+        // What the model will actually see, so the runtime's echo matches even
+        // when context or a continuation digest is prepended.
+        modelText: text.trim(),
+        context: contextLabel,
+        images: images.length,
+      }),
+    ]
     this.#afterMutations(mutations)
 
     const blocks: PromptContentBlock[] = []

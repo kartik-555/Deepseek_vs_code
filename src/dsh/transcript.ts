@@ -250,7 +250,7 @@ function summarizeTodos(parsed: Record<string, unknown>): string {
 export class TranscriptReducer {
   readonly #items: ChatItem[] = []
   readonly #toolItemByCallId = new Map<string, string>()
-  readonly #pendingEchoes: { id: string; text: string }[] = []
+  readonly #pendingEchoes: { id: string; modelText: string }[] = []
   #title: string | undefined
   #activity: AgentActivity = { kind: 'idle' }
   #echoCounter = 0
@@ -291,23 +291,67 @@ export class TranscriptReducer {
   }
 
   /**
-   * Show the user's own message immediately, before the runtime echoes it back
-   * through `agent/inbox/spliced`. The runtime's copy is dropped by
-   * {@link #consumeEcho} so the transcript never shows a message twice.
+   * Show the user's own message immediately, before the runtime echoes it back.
+   *
+   * The placeholder is temporary: when the runtime reports the message it is
+   * replaced by the runtime's own item, so ids come from the session log and a
+   * repeated event for the same message cannot add a second bubble.
    */
-  echoUser(text: string, context: string, images: number): TranscriptMutation {
+  echoUser(input: { displayText: string; modelText: string; context: string; images: number }): TranscriptMutation {
     const id = `local:${this.#echoCounter++}`
-    const item: ChatItem = { id, kind: 'user', at: Date.now(), text, images, context }
+    const item: ChatItem = {
+      id,
+      kind: 'user',
+      at: Date.now(),
+      text: input.displayText,
+      images: input.images,
+      context: input.context,
+    }
     this.#items.push(item)
-    this.#pendingEchoes.push({ id, text })
+    this.#pendingEchoes.push({ id, modelText: input.modelText })
     return { op: 'append', item }
   }
 
-  #consumeEcho(text: string): boolean {
-    const index = this.#pendingEchoes.findIndex((entry) => entry.text === text)
-    if (index < 0) return false
-    this.#pendingEchoes.splice(index, 1)
-    return true
+  /**
+   * Match a runtime user message to the placeholder it echoes, drop the
+   * placeholder, and return the mutations that put the runtime's item in its
+   * place. `undefined` when nothing is pending for this message.
+   *
+   * Matching is on the text the model saw, which is what the runtime echoes.
+   * Context and the continuation digest are *prepended*, so a runtime message
+   * that ends with the placeholder's text is that placeholder's echo. A
+   * message with no text of its own (an image-only turn) matches the oldest
+   * text-free placeholder.
+   */
+  #takeEcho(runtimeText: string, at: number, message: TranscriptMessage): TranscriptMutation[] | undefined {
+    let index = this.#pendingEchoes.findIndex(
+      (echo) => echo.modelText.length > 0 && (runtimeText === echo.modelText || runtimeText.endsWith(echo.modelText)),
+    )
+    if (index < 0) index = this.#pendingEchoes.findIndex((echo) => echo.modelText.length === 0)
+    if (index < 0) return undefined
+    const echo = this.#pendingEchoes.splice(index, 1)[0]
+    if (!echo) return undefined
+
+    // Read the placeholder before dropping it: a text-free turn (an image only)
+    // has nothing in the runtime message to rebuild the label from.
+    const placeholderIndex = this.#items.findIndex((item) => item.id === echo.id)
+    const placeholder = placeholderIndex >= 0 ? this.#items[placeholderIndex] : undefined
+    const carried = placeholder && placeholder.kind === 'user' ? placeholder : undefined
+    if (placeholderIndex >= 0) this.#items.splice(placeholderIndex, 1)
+
+    const item: ChatItem = {
+      id: message.id,
+      kind: 'user',
+      at,
+      text: blockText(message.content) || carried?.text || '',
+      images: countImages(message.content) || carried?.images || 0,
+      context: carried?.context ?? '',
+    }
+    this.#items.push(item)
+    return [
+      { op: 'remove', id: echo.id },
+      { op: 'append', item },
+    ]
   }
 
   /** Apply one raw event; returns the mutations a view must render. */
@@ -469,7 +513,12 @@ export class TranscriptReducer {
     for (const message of data?.inserted ?? []) {
       if (message?.role !== 'user') continue
       if (message.source?.kind !== undefined && message.source.kind !== 'user') continue
-      if (this.#consumeEcho(blockText(message.content))) continue
+      const replaced = this.#takeEcho(blockText(message.content), event.time, message)
+      if (replaced) {
+        mutations.push(...replaced)
+        continue
+      }
+      if (this.#items.some((item) => item.kind === 'user' && item.id === message.id)) continue
       mutations.push(this.#appendUser(message, event.time))
     }
     return mutations
@@ -479,8 +528,9 @@ export class TranscriptReducer {
     const message = event.data as UserMessageData | undefined
     if (!message || message.role !== 'user') return []
     if (message.source?.kind !== undefined && message.source.kind !== 'user') return []
+    const replaced = this.#takeEcho(blockText(message.content), event.time, message)
+    if (replaced) return replaced
     if (this.#items.some((item) => item.kind === 'user' && item.id === message.id)) return []
-    if (this.#consumeEcho(blockText(message.content))) return []
     return [this.#appendUser(message, event.time)]
   }
 
@@ -515,6 +565,11 @@ export class TranscriptReducer {
       reasoning,
       text,
       ...(data?.usage ? { usage: data.usage as Usage } : {}),
+    }
+    const existing = this.#items.findIndex((candidate) => candidate.id === message.id)
+    if (existing >= 0) {
+      this.#items[existing] = item
+      return [{ op: 'update', id: message.id, patch: { ...item } }]
     }
     this.#items.push(item)
     return [{ op: 'append', item }]
